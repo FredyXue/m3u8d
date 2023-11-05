@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/spf13/cobra"
 	"io/ioutil"
 	"log"
 	"m3u8d"
@@ -11,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
@@ -114,6 +115,9 @@ func init() {
 	downloadCmd.Flags().StringVarP(&gRunReq.SetProxy, "SetProxy", "", "", "代理设置, http://127.0.0.1:8080 socks5://127.0.0.1:1089")
 	downloadCmd.Flags().BoolVarP(&gRunReq.SkipRemoveTs, "SkipRemoveTs", "", false, "不删除下载的ts文件")
 	downloadCmd.Flags().IntVarP(&gRunReq.ThreadCount, "ThreadCount", "", 8, "下载线程数")
+	downloadCmd.Flags().StringVarP(&gRunReq.DecryptKey, "DecryptKey", "k", "", "custom hex aes key")
+	downloadCmd.Flags().StringVarP(&gRunReq.TsUrl, "TsUrl", "t", "", "自定义 ts url")
+	downloadCmd.Flags().StringVarP(&gRunReq.TsSuffix, "TsSuffix", "s", "", "ts 片链接后缀")
 	rootCmd.AddCommand(downloadCmd)
 	curlCmd.DisableFlagParsing = true
 	rootCmd.AddCommand(curlCmd)

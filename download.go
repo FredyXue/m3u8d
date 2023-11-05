@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -94,6 +95,9 @@ type RunDownload_Req struct {
 	SkipRemoveTs        bool
 	ProgressBarShow     bool
 	ThreadCount         int
+	DecryptKey          string // custom hex aes key
+	TsUrl               string // 自定义 ts url
+	TsSuffix            string // ts 片链接后缀
 }
 
 type downloadEnv struct {
@@ -184,14 +188,14 @@ func (this *downloadEnv) RunDownload(req RunDownload_Req) (resp RunDownload_Resp
 	}
 	beginSeq := parseBeginSeq(m3u8Body)
 	// 获取m3u8地址的内容体
-	encInfo, err := this.getEncryptInfo(req.M3u8Url, string(m3u8Body))
+	encInfo, err := this.getEncryptInfo(req.M3u8Url, string(m3u8Body), req.DecryptKey)
 	if err != nil {
 		resp.ErrMsg = "getEncryptInfo: " + err.Error()
 		resp.IsCancel = this.GetIsCancel()
 		return resp
 	}
 	this.SetProgressBarTitle("[3/6]获取ts列表")
-	tsList, errMsg := getTsList(beginSeq, req.M3u8Url, string(m3u8Body))
+	tsList, errMsg := getTsList(beginSeq, req.M3u8Url, string(m3u8Body), req.TsUrl, req.TsSuffix)
 	if errMsg != "" {
 		resp.ErrMsg = "获取ts列表错误: " + errMsg
 		return resp
@@ -357,7 +361,7 @@ func GetWd() string {
 }
 
 // 获取m3u8加密的密钥, 可能存在iv
-func (this *downloadEnv) getEncryptInfo(m3u8Url string, html string) (info *EncryptInfo, err error) {
+func (this *downloadEnv) getEncryptInfo(m3u8Url string, html string, decryptKey string) (info *EncryptInfo, err error) {
 	keyPart := M3u8Parse(html).GetPart("#EXT-X-KEY")
 	uri := keyPart.KeyValue["URI"]
 	if uri == "" {
@@ -367,15 +371,26 @@ func (this *downloadEnv) getEncryptInfo(m3u8Url string, html string) (info *Encr
 	if method == EncryptMethod_NONE {
 		return nil, nil
 	}
-	keyUrl, errMsg := resolveRefUrl(m3u8Url, uri)
-	if errMsg != "" {
-		return nil, errors.New(errMsg)
-	}
 	var res []byte
-	res, err = this.doGetRequest(keyUrl)
-	if err != nil {
-		return nil, err
+	if decryptKey != "" {
+		// local key
+		res, err = hex.DecodeString(decryptKey) // custom aes key
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// remote key
+		keyUrl, errMsg := resolveRefUrl(m3u8Url, uri)
+		if errMsg != "" {
+			return nil, errors.New(errMsg)
+		}
+
+		res, err = this.doGetRequest(keyUrl)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	if method == EncryptMethod_AES128 && len(res) != 16 { // Aes 128
 		return nil, errors.New("getEncryptInfo invalid key " + strconv.Quote(string(res)))
 	}
@@ -387,11 +402,13 @@ func (this *downloadEnv) getEncryptInfo(m3u8Url string, html string) (info *Encr
 			return nil, err
 		}
 	}
-	return &EncryptInfo{
+	info = &EncryptInfo{
 		Method: method,
 		Key:    res,
 		Iv:     iv,
-	}, nil
+	}
+	log.Printf("get EncryptInfo: %+v", info)
+	return
 }
 
 func splitLineWithTrimSpace(s string) []string {
@@ -403,7 +420,7 @@ func splitLineWithTrimSpace(s string) []string {
 	return tmp
 }
 
-func getTsList(beginSeq uint64, m38uUrl string, body string) (tsList []TsInfo, errMsg string) {
+func getTsList(beginSeq uint64, m38uUrl string, body string, tsUrl, tsSuffix string) (tsList []TsInfo, errMsg string) {
 	index := 0
 
 	for _, line := range splitLineWithTrimSpace(body) {
@@ -411,13 +428,19 @@ func getTsList(beginSeq uint64, m38uUrl string, body string) (tsList []TsInfo, e
 		if !strings.HasPrefix(line, "#") && line != "" {
 			index++
 			var after string
-			after, errMsg = resolveRefUrl(m38uUrl, line)
+
+			if tsUrl != "" {
+				after, errMsg = resolveRefUrl(tsUrl, line) // 自定义 ts url
+			} else {
+				after, errMsg = resolveRefUrl(m38uUrl, line)
+			}
+
 			if errMsg != "" {
 				return nil, errMsg
 			}
 			tsList = append(tsList, TsInfo{
 				Name: fmt.Sprintf("%05d.ts", index), // ts视频片段命名规则
-				Url:  after,
+				Url:  after + tsSuffix,
 				Seq:  beginSeq + uint64(index-1),
 			})
 		}
